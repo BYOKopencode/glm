@@ -52,6 +52,7 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -455,6 +456,68 @@ def flatten_messages(messages) -> str:
 # ---------------------------------------------------------------------------
 # SSE chunk parsing (raw upstream line -> normalized delta)
 # ---------------------------------------------------------------------------
+
+# chat.z.ai has shipped more than one shape for the reasoning prefix that
+# appears inside an edit_content snapshot. Handle all of them, because an
+# exact-prefix match alone is brittle: the snapshot is often re-wrapped or
+# re-whitespaced relative to the raw thinking deltas we accumulated.
+DETAILS_RE = re.compile(r"^\s*<details[^>]*>.*?</details>\s*",
+                        re.DOTALL | re.IGNORECASE)
+THINK_TAG_RE = re.compile(r"^\s*<(think|thinking|reasoning)>.*?</\1>\s*",
+                          re.DOTALL | re.IGNORECASE)
+
+
+def strip_thinking(snapshot: str, thinking: str):
+    """Remove a chain-of-thought prefix from a full-snapshot edit_content.
+
+    Returns (answer_text, stripped_bool). Tries, in order:
+      1. a <details>...</details> wrapper (z.ai's collapsible reasoning block)
+      2. a <think>/<thinking>/<reasoning> tag pair
+      3. an exact prefix match against the thinking we already routed
+      4. a whitespace-tolerant prefix match, for when the snapshot reflows
+         the same text with different spacing or newlines
+    """
+    if not snapshot:
+        return snapshot, False
+
+    for pattern in (DETAILS_RE, THINK_TAG_RE):
+        m = pattern.match(snapshot)
+        if m:
+            return snapshot[m.end():], True
+
+    if not thinking:
+        return snapshot, False
+
+    if snapshot.startswith(thinking):
+        # lstrip: the snapshot usually separates reasoning from answer with
+        # blank lines that would otherwise open the reply.
+        return snapshot[len(thinking):].lstrip(), True
+
+    # Whitespace-tolerant walk: consume the thinking from the front of the
+    # snapshot, allowing either side to differ in runs of whitespace.
+    i = 0
+    j = 0
+    n = len(snapshot)
+    m2 = len(thinking)
+    while i < n and j < m2:
+        a = snapshot[i]
+        b = thinking[j]
+        if a == b:
+            i += 1
+            j += 1
+        elif a.isspace():
+            i += 1
+        elif b.isspace():
+            j += 1
+        else:
+            break
+    while j < m2 and thinking[j].isspace():
+        j += 1
+    if j >= m2:
+        return snapshot[i:].lstrip(), True
+
+    return snapshot, False
+
 
 def process_chunk(line: str) -> Optional[dict]:
     if line.startswith("data: "):
@@ -1171,9 +1234,9 @@ class BrowserManager(object):
                             # block gets re-emitted as answer content, running
                             # straight into the real reply.
                             if edit and not content:
-                                snap = edit
-                                if thinking_buf and snap.startswith(thinking_buf):
-                                    snap = snap[len(thinking_buf):]
+                                snap, did = strip_thinking(edit, thinking_buf)
+                                if did and DEBUG:
+                                    log("stripped thinking prefix from snapshot")
                                 if snap.startswith(emitted):
                                     content = snap[len(emitted):]
                                 else:
