@@ -1435,6 +1435,15 @@ async def chat_completions(request: Request):
         return JSONResponse(status_code=502,
                             content={"error": result["errorPayload"]})
 
+    # collect() accumulates reasoning separately; surface it instead of
+    # dropping it. Key name matches the streaming delta and the convention
+    # used by DeepSeek/OpenRouter, so clients that understand thinking output
+    # find it in the same place. Omitted entirely when empty, so responses for
+    # non-thinking models keep the exact stock OpenAI shape.
+    message = {"role": "assistant", "content": result["content"]}
+    if result.get("reasoning"):
+        message["reasoning_content"] = result["reasoning"]
+
     return {
         "id": "chatcmpl-" + uuid.uuid4().hex,
         "object": "chat.completion",
@@ -1442,7 +1451,7 @@ async def chat_completions(request: Request):
         "model": req.model,
         "choices": [{
             "index": 0,
-            "message": {"role": "assistant", "content": result["content"]},
+            "message": message,
             "finish_reason": "stop",
         }],
         "usage": {
