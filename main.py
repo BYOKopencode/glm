@@ -1082,6 +1082,7 @@ class BrowserManager(object):
 
                 buffer = ""
                 emitted = ""       # for edit_content (full-snapshot) diffing
+                thinking_buf = ""  # raw chain-of-thought seen so far
                 got_first = False
                 finished = False
 
@@ -1162,13 +1163,22 @@ class BrowserManager(object):
                             reasoning = parsed.get("reasoning_content") or ""
                             edit = parsed.get("edit_content") or ""
 
-                            # edit_content is a full snapshot; emit the new tail.
+                            # edit_content is a full snapshot. GLM often
+                            # includes the entire chain-of-thought as a prefix
+                            # of that snapshot. `emitted` is deliberately not
+                            # advanced during the thinking phase, so without
+                            # stripping thinking_buf here the whole reasoning
+                            # block gets re-emitted as answer content, running
+                            # straight into the real reply.
                             if edit and not content:
-                                if edit.startswith(emitted):
-                                    content = edit[len(emitted):]
+                                snap = edit
+                                if thinking_buf and snap.startswith(thinking_buf):
+                                    snap = snap[len(thinking_buf):]
+                                if snap.startswith(emitted):
+                                    content = snap[len(emitted):]
                                 else:
-                                    content = edit
-                                emitted = edit
+                                    content = snap
+                                emitted = snap
                             elif content and phase != "thinking":
                                 emitted += content
 
@@ -1177,6 +1187,13 @@ class BrowserManager(object):
                             if phase == "thinking" and content and not reasoning:
                                 reasoning = content
                                 content = ""
+
+                            # Record the raw thinking before THINK_MODE can
+                            # blank it, so snapshot stripping above still works
+                            # when the mode is "hide" or "raw".
+                            if reasoning:
+                                thinking_buf += reasoning
+
                             if THINK_MODE == "hide":
                                 reasoning = ""
                             elif THINK_MODE == "raw" and reasoning:
