@@ -170,7 +170,22 @@ SET_MODEL = os.environ.get("SET_MODEL", "1").lower() not in ("0", "false", "no")
 #                clean for coding tools, thinking still available separately)
 #   hide      -> drop thinking entirely; only the final answer is returned
 #   raw       -> keep thinking inline in content (original behaviour)
+#   tags      -> inline in content, wrapped in <think>...</think>. Many UIs
+#                that ignore reasoning_content (OpenWebUI, LibreChat, Cherry
+#                Studio, Chatbox) DO render these tags as a collapsible
+#                "Thinking" block, so this gives visible AND separated
+#                thinking in clients that understand neither field.
 THINK_MODE = os.environ.get("THINK_MODE", "reasoning").strip().lower()
+VALID_THINK_MODES = ("reasoning", "hide", "raw", "tags")
+if THINK_MODE not in VALID_THINK_MODES:
+    print("[glm] warning: unknown THINK_MODE " + repr(THINK_MODE)
+          + "; falling back to 'reasoning'. Valid: "
+          + ", ".join(VALID_THINK_MODES), flush=True)
+    THINK_MODE = "reasoning"
+# Markers used when THINK_MODE == "tags". Override if your client expects a
+# different convention, e.g. THINK_OPEN_TAG='<thinking>'.
+THINK_OPEN_TAG = os.environ.get("THINK_OPEN_TAG", "<think>")
+THINK_CLOSE_TAG = os.environ.get("THINK_CLOSE_TAG", "</think>")
 # Reuse ONE Bright Data session across rapid back-to-back requests. Kept well
 # under Bright Data's 5-min idle and 60-min max caps, and always on ONE domain.
 # 0 = always fresh. This only saves startup latency; conversation memory does
@@ -1146,6 +1161,8 @@ class BrowserManager(object):
                 buffer = ""
                 emitted = ""       # for edit_content (full-snapshot) diffing
                 thinking_buf = ""  # raw chain-of-thought seen so far
+                think_open = False    # THINK_MODE=tags: <think> emitted?
+                think_closed = False  # THINK_MODE=tags: </think> emitted?
                 got_first = False
                 finished = False
 
@@ -1262,6 +1279,29 @@ class BrowserManager(object):
                             elif THINK_MODE == "raw" and reasoning:
                                 content = reasoning + content
                                 reasoning = ""
+                            elif THINK_MODE == "tags":
+                                # Fold thinking into content between tags.
+                                # Open on the first thinking token, close on
+                                # the first answer token.
+                                if reasoning:
+                                    prefix = ""
+                                    if not think_open:
+                                        prefix = THINK_OPEN_TAG
+                                        think_open = True
+                                    if content and not think_closed:
+                                        # Same frame carries answer text too.
+                                        content = (prefix + reasoning
+                                                   + THINK_CLOSE_TAG + "\n\n"
+                                                   + content)
+                                        think_closed = True
+                                    else:
+                                        content = prefix + reasoning + content
+                                    reasoning = ""
+                                elif (content and think_open
+                                        and not think_closed):
+                                    content = (THINK_CLOSE_TAG + "\n\n"
+                                               + content)
+                                    think_closed = True
 
                             if content or reasoning:
                                 yield sse(delta_frame(
@@ -1280,7 +1320,18 @@ class BrowserManager(object):
                     if parsed and parsed.get("type") == "delta":
                         c = parsed.get("content") or ""
                         if c:
+                            if (THINK_MODE == "tags" and think_open
+                                    and not think_closed):
+                                c = THINK_CLOSE_TAG + "\n\n" + c
+                                think_closed = True
                             yield sse(delta_frame(content=c))
+
+                # Never leave an unclosed <think> block: thinking with no
+                # answer, or an early break, would otherwise swallow the rest
+                # of the conversation in clients that parse the tag.
+                if THINK_MODE == "tags" and think_open and not think_closed:
+                    yield sse(delta_frame(content=THINK_CLOSE_TAG + "\n\n"))
+                    think_closed = True
 
                 yield sse(delta_frame(finish="stop"))
                 yield "data: [DONE]\n\n"
