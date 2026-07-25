@@ -1,0 +1,18 @@
+# Keep the build context small and never bake secrets into the image.
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.zip
+*.tar.gz
+*.png
+*.log
+.DS_Store
+.idea/
+.vscode/

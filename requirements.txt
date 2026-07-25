@@ -1,0 +1,16 @@
+# GLM proxy dependencies.
+#
+# VERSION LOCK RULE
+#   The `playwright` pip package and its Chromium build are a matched pair.
+#   Keep the pin below in sync with PLAYWRIGHT_VERSION in the Dockerfile
+#   (base image tag mcr.microsoft.com/playwright/python:vX.Y.Z-jammy).
+#
+#   The Dockerfile also runs `python -m playwright install chromium`, which
+#   downloads the browser build matching whatever pip version is actually
+#   installed. So a mismatch costs an extra download instead of producing the
+#   "Executable doesn't exist at .../chrome-headless-shell" runtime crash.
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+playwright==1.48.0

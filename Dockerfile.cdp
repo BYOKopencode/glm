@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+
+# CDP MODE IMAGE
+#
+# In this mode Playwright does NOT launch a local browser. It connects over a
+# websocket to a REMOTE one (Bright Data Scraping Browser, Browserless, or any
+# CDP endpoint) via BROWSER_CDP_URL. No Chromium binary, no system libraries,
+# so a plain slim image is enough -- roughly 150 MB instead of ~1.8 GB.
+#
+# BROWSER_CDP_URL MUST be set at runtime. Without it main.py falls back to
+# launching a local Chromium that does not exist in this image, and every
+# request returns a browser_unavailable error.
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+RUN python -m py_compile main.py \
+ && python main.py --selfcheck \
+ && rm -rf __pycache__
+
+COPY . .
+
+ENV PORT=8000
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8000')+'/health', timeout=4)" || exit 1
+
+CMD ["python", "main.py"]

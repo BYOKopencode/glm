@@ -1,0 +1,25 @@
+# Railway build/deploy config for the Playwright-backed GLM proxy.
+# Uses the Dockerfile (required for Chromium + system libs).
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+# To deploy in remote-browser mode instead, point this at Dockerfile.cdp and
+# set BROWSER_CDP_URL. That image is ~10x smaller and builds in under a minute.
+
+[deploy]
+# No startCommand: let the Dockerfile CMD (python main.py) run so PORT is read
+# inside Python. A startCommand here would override CMD, and Railway does not
+# expand ${PORT:-8000} -> uvicorn would get the literal string and crash.
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# NOTES
+#  - Chromium needs memory. Give this service >= 1 GB RAM.
+#  - /health and / are intentionally unauthenticated so Railway healthchecks
+#    pass even when API_KEY is set.
+#  - Set ALLOWED_ORIGINS to your frontend origin instead of the "*" default
+#    once things work; credentialed CORS requests are refused while it is "*".
+#  - If Aliyun's captcha starts hard-blocking Railway's datacenter IPs, set
+#    PROXY_SERVER (residential proxy) or BROWSER_CDP_URL (remote browser).
